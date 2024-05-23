@@ -14,11 +14,15 @@ function App() {
   const [err, setErr] = useState();
   const [progress, setProgressObject] = useState({width: '0%'});
   const setProgress = (val) => { setProgressObject({width: `${val}%`}) }
+  const [qualitativePrefix, setQualitativePrefix] = useState('');
+  const [picIndex, setPicIndex] = useState(1);
+  const [hideTimestamp, setHideTimestamp] = useState(true);
 
   useEffect(() => {
     const fileCanceledListener = (event) => {
-      console.log('file canceled');
+      //console.log('file canceled');
       setButtonDisabled(false);
+      setModal(false);
     };
 
     const csvParsedListener = (event, headerRow) => {
@@ -27,17 +31,18 @@ function App() {
     };
 
     const folderSavedListener = (event) => {
-      console.log('folder saved');
+      //console.log('folder saved');
       setButtonDisabled(false);
       setModal(false);
     };
 
     const folderProgressListener = (event, progress) => {
+      // console.log('progess: ', progress);
       setProgress(progress);
     }
 
     const folderErrorListener = (event, err) => {
-      console.error('An error occured during folder save: ', err);
+      // console.error('An error occured during folder save: ', err);
       if(typeof(err) === typeof("")){
         setErr(err);
       }
@@ -70,15 +75,39 @@ function App() {
   }
 
   const launchFolderSelectDialog = () => {
+    //Validate all fields
+    //check that picIndex question is marked as !Structured
+    if (questions[picIndex].type === Types.STRUCTURED){
+      alert('The row selected as PIC cannot be STRUCTURED. Please change it.');
+      return;
+    }
+    //make sure there is a Document Prefix?
+
     setButtonDisabled(true);
     setModal(true);
-    ipcRenderer.send('launch-folder-save-dialog', questions);
+    let options = {
+      hideTimestamp: hideTimestamp,
+      picIndex: picIndex,
+      qualitativePrefix: qualitativePrefix
+    }
+    // console.log(options);
+    ipcRenderer.send('launch-folder-save-dialog', questions, options);
   }
 
   const updateQuestion = (idx, val, hasLink = false, link = '') => {
     let newQuestions = [...questions];
     newQuestions[idx].type = val;
     newQuestions[idx].hasLink = hasLink;
+    if(newQuestions[idx].link !== link){
+      //if link contains anything but a number or comma return and do not update 
+      const regex = new RegExp('[^0123456789,]', 'g');
+      let checked = link.replace(regex, '');
+      if(checked !== link){
+        //invalid characters where removed, not not update
+        // I supose the update could happen anyway since the offending chars where removed, but whatever
+        return;
+      }
+    }
     if(newQuestions[idx].type === Types.QUALITATIVE && hasLink){
       newQuestions[idx].link = link === '' ? idx - 1 : link;
     }
@@ -89,15 +118,38 @@ function App() {
   }
 
   return (
-    <div className="App" style={{padding: 5}}>
+    <div className="App Container" style={{padding: 5}}>
       <div>
-        <button className="btn btn-primary" disabled={buttonDisabled} onClick={(event) => {
+        <button className="btn btn-primary mt-2" disabled={buttonDisabled} onClick={(event) => {
           launchFileOpenDialog();
         }} style={{marginRight: 5}}>Open File</button>
-        <button className="btn btn-warning" disabled={buttonDisabled} onClick={(event) => {
+        <button className="btn btn-warning mt-2" disabled={buttonDisabled} onClick={(event) => {
           launchFolderSelectDialog();
         }}>Save Data</button>
-        <TypeSelectTable questions={questions} updateQuestion={updateQuestion}/>
+        <hr></hr>
+        <div className='row'>
+          <div className='col'>
+            <div className='mb-2'>
+              <input type="checkbox" className='form-check-input' id="HideTimestampCheckbox" value='' onChange={(event) => {setHideTimestamp(!hideTimestamp)}} checked={hideTimestamp}></input>
+              <label htmlFor='HideTimestampCheckbox' className='form-check-label ms-2'>Hide Timestamp</label>
+            </div>
+          </div>
+        </div>
+        <div className='row'>
+          <div className='col'>
+            <div className="mb-2">
+              <label htmlFor="QualitativePrefixInput" className="form-label">Qualitative Document Prefix</label>
+              <input type="text" className='form-control' id="QualitativePrefixInput" value={qualitativePrefix} onChange={(event) => {setQualitativePrefix(event.target.value);}}></input>
+            </div>
+          </div>
+          <div className='col'>
+            <div className="mb-2">
+              <label htmlFor="PICRow" className="form-label">PIC row #</label>
+              <input type="number" className='form-control' id="PICRow" value={picIndex} onChange={(event) => {setPicIndex(event.val)}}></input>
+            </div>
+          </div>
+        </div>
+        <TypeSelectTable hideTimestamp={hideTimestamp} questions={questions} updateQuestion={updateQuestion}/>
       </div>
       <div style={
         modal ? 
