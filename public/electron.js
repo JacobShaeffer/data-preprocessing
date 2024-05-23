@@ -14,24 +14,10 @@ const Types = Object.freeze({
 
 let csvData = [];
 
-function buildDocx(questions, data, hideTimestamp){
-  // if(hideTimestamp){
-  //   headerRow = headerRow.filter((header) => {
-  //     return header.toLowerCase().localeCompare('timestamp') !== 0;
-  //   });
-  // }
+function buildDocx(questions, data){
 
   let paragraphs = [];
-  // console.log('questions: ', questions)
   questions.forEach((question, idx) => {
-
-    // skip the timestamp if box is checked
-    if(hideTimestamp){
-      // console.log('question: ', question, typeof question);
-      if(question.toLowerCase().localeCompare('timestamp') === 0){
-        return; // same as continue in a foreach loop
-      }
-    }
 
     // skip empty answers for qualitative data
     if(data[idx] === ''){
@@ -110,20 +96,27 @@ function createWindow () {
     }
   });
 
-  function saveStructuredData(filePath, questions, hideTimestamp, event){
+  function saveStructuredData(filePath, questions, event){
 
-      //take the 2d array csvData and remove the columns that are Qualitative
-      let structuredData = [];
-      csvData.forEach((row, i) => {
-        let filteredRow = row.filter((val, idx) => {
-          let question = questions[idx];
-          if(hideTimestamp && question.question.toLowerCase().localeCompare('timestamp') === 0){
-            return false;
+      let header = [];
+      questions.forEach((question) => {
+        if(question.type !== Types.QUALITATIVE){
+          header.push(question.question);
+        }
+      })
+      console.log('header: ', header);
+      let answers = Array.from({length:questions[0].answers.length}, () => []); //instantiate a 2d with empty arrays as children
+      console.log('answers: ', answers);
+      answers.forEach((row, idx) => {
+        questions.forEach((question) => {
+          if(question.type !== Types.QUALITATIVE){
+            row.push(question.answers[idx])
           }
-          return question.type !== Types.QUALITATIVE;
-        });
-        structuredData.push(filteredRow);
-      });
+        })
+      })
+      console.log('answers: ', answers);
+      let structuredData = [header].concat(answers)
+      console.log("structured: " , structuredData);
       
       event.reply('folder-progress', 30);
 
@@ -151,45 +144,40 @@ function createWindow () {
     }
 
   function saveQualitativeData(folderPath, questions, opts, event){
-    let fullHeaderRow = [];
-    csvData[0].forEach((header) => fullHeaderRow.push(header));
-    let picHeader = fullHeaderRow[opts.picIndex];
-
-    let headerRow = [];
-    for(let i=0; i<questions.length; i++){
-      let val = questions[i];
-      if(val.type !== Types.STRUCTURED){
-        if(val.hasLink){
-          let linkedQuestions = String(val.link).split(',');
-          for(let j=0; j<linkedQuestions.length; j++){
-            headerRow.push(fullHeaderRow[linkedQuestions[j]]);
-          }
-        }
-        headerRow.push(val.question);
+    //set isLinked true on every question that has another linking to it
+    questions.forEach((question) => {
+      question.isLinked = false //set them all false by default
+    });
+    questions.forEach((question) => {
+      if(question.hasLink){
+        let links = String(question.link).split(',');
+        links.forEach((link) => {
+          questions[link].isLinked = true
+        })
       }
-    }
+    });
 
-    // headerRow = headerRow.filter((val, idx) => {
-    //   let question = questions[idx];
-    //   return question.type !== Types.STRUCTURED;
-    // });
+    let responses_length = questions[0].answers.length
 
-    let responses = csvData.slice(1); //remove the first row (the header row)
-    let picIdx = headerRow.findIndex((header) => header.includes(picHeader));
 
     event.reply('folder-progress', 70);
     let progress = 70.0;
-    let progessPerFile = 30.0/responses.length;
+    let progessPerFile = 30.0/responses_length;
 
-    responses.forEach((row, i) => {
+    for(let i=0; i<responses_length; i++) {
       event.reply('folder-progress', progress + i*progessPerFile);
-      let qualitativeData = row.filter((val, idx) => {
-        let question = questions[idx];
-        return question.type !== Types.STRUCTURED;
-      });
 
-      let doc = buildDocx(headerRow, qualitativeData, opts.hideTimestamp);
-      // console.log(picIdx, qualitativeData[picIdx], qualitativeData);
+
+      /*
+        At this point I should just be able to pass questions and an index to the buildDocx function
+        Since it needs to look through all the questions anyway it will loop through, grab the question 
+        then use the index to grab the appropriate answer, it can also do the logic for blanks
+        The same index can be used to grab the pic after the Docx is built
+        The index already exists too, since i in this for loop is from 0 to the answer length, that should work perfectly
+      */
+
+
+      let doc = buildDocx(headerRow, qualitativeData);
       let uid = picIdx === -1 ? `NoPIC${i+1}` : qualitativeData[picIdx];
       uid = uid ? uid : `NoPIC${i+1}`;
       // console.log('uid: ', uid);
@@ -202,7 +190,7 @@ function createWindow () {
           }
         });
       });
-    });
+    }
     event.reply('folder-progress', 100);
   }
 
@@ -211,9 +199,19 @@ function createWindow () {
   //   picIndex: picIndex,
   //   qualitativePrefix: qualitativePrefix
   // }
+  // questions = [
+    // {
+    //   question: '',
+    //   type: '',
+    //   hasLink: false,
+    //   link: '',  
+    //THINGS TO ADD
+    //    answer
+    // }
+  // ]
   ipcMain.on('launch-folder-save-dialog', async (event, questions, opts) => {
-    console.log('opts: ', opts);
-    console.log('questions: ', questions)
+    // console.log('opts: ', opts);
+    // console.log('questions: ', questions)
     const result = await dialog.showOpenDialog({
       properties: ['openDirectory', 'createDirectory']
     });
@@ -223,9 +221,31 @@ function createWindow () {
     else{
       let folderPath = result.filePaths[0];
       let structedDataFilePath = path.join(folderPath, opts.qualitativePrefix + ' StucturedData.csv');
+      
+      questions.forEach((question) => question.answers = [])
+      let responses = csvData.slice(1); //remove the first row (the header row)
+      responses.forEach((response, index) => {
+        response.forEach((answer, jndex) => {
+          questions[jndex].answers.push(answer)
+        })
+      });
+      if(opts.hideTimestamp){
+        for(let i=0; i<questions.length; i++){
+          if(questions[i].question.toLowerCase().localeCompare('timestamp') === 0){
+            questions.splice(i, 1);
+            if(i < opts.picIndex){
+              opts.picIndex -= 1;
+            }
+            break;
+          }
+        }
+      }
+      console.log('questions: ', questions);
+      saveStructuredData(structedDataFilePath, questions, event);
+      saveQualitativeData(folderPath, questions, opts, event);
       try{
-        saveStructuredData(structedDataFilePath, questions, opts.hideTimestamp, event);
-        saveQualitativeData(folderPath, questions, opts, event);
+        // saveStructuredData(structedDataFilePath, questions, event);
+        // saveQualitativeData(folderPath, questions, opts, event);
       }catch(err){
         // console.error(err);
         event.reply('folder-error', err);
