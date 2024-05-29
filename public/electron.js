@@ -4,7 +4,6 @@ const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const { Document, Packer, Paragraph, TextRun } = require('docx');
 const XLSX = require("xlsx");
 const path = require('path');
-const { assert } = require('console');
 
 const Types = Object.freeze({
   QUALITATIVE: "Q",
@@ -14,24 +13,58 @@ const Types = Object.freeze({
 
 let csvData = [];
 
-function buildDocx(questions, data){
+function isEmptyString(str) {
+  // Check if the string is null or undefined
+  if (str === null || str === undefined) {
+      return true;
+  }
+  // Use trim to remove whitespace and then check the length
+  return str.trim().length === 0;
+}
+
+function buildDocx(questions, answer_idx, hideTimestamp){
 
   let paragraphs = [];
-  questions.forEach((question, idx) => {
+  questions.forEach((question) => {
 
-    // skip empty answers for qualitative data
-    if(data[idx] === ''){
-      return; //same as continue in a foreach loop
+    if(hideTimestamp && question.question.toLowerCase().localeCompare('timestamp') === 0){
+      return;
+    }
+
+    // skip questions that would not be skipped because they are linked to but all answers to questions that link to them are emtpy
+    // example question[5] type == S and linkedTo = [3], normally this would not be skipped because it has a linkedTo value, but if
+    //    the answer to question[3] (we get the appropriate answer by using the answer_idx given as arg) is empty, then 5 should be skipped 
+    var allLinkersEmpty = true;
+    // console.log(question)
+    question.linkedTo.forEach((link) => {
+      if(!isEmptyString(questions[link].answers[answer_idx])){
+        allLinkersEmpty = false;
+      }
+    });
+
+    // skip questions that are Structured and not linked to
+    if(question.type === Types.STRUCTURED && allLinkersEmpty){ // allLinksEmpty should always be false is linkedTo.length === 0 and true if there is at least one non-empty question
+      return;
+    }
+    
+    // skip questions that are empty, unless they are linked too
+    var answer = question.answers[answer_idx]
+    var isEmpty = isEmptyString(answer);
+    if(isEmpty && allLinkersEmpty){
+      return;
+    }
+    else if(isEmpty){
+      answer = "No Response";
     }
 
     paragraphs.push(new Paragraph({
       children: [
-        new TextRun({text: question, bold: true, size: '11pt'})
+        new TextRun({text: question.question, bold: true, size: '11pt'})
       ]
     }));
     paragraphs.push(new Paragraph({
       children: [
-        new TextRun({text: data[idx], size: '11pt'})
+        new TextRun({text: answer, size: '11pt'})
       ]
     }))
     paragraphs.push(new Paragraph({text: ""})); // empty paragraph to separate entries
@@ -96,27 +129,33 @@ function createWindow () {
     }
   });
 
-  function saveStructuredData(filePath, questions, event){
+  function saveStructuredData(filePath, questions, opts, event){
 
       let header = [];
       questions.forEach((question) => {
+        if(opts.hideTimestamp && question.question.toLowerCase().localeCompare('timestamp') === 0){
+          return;
+        }
         if(question.type !== Types.QUALITATIVE){
           header.push(question.question);
         }
       })
-      console.log('header: ', header);
+      // console.log('header: ', header);
       let answers = Array.from({length:questions[0].answers.length}, () => []); //instantiate a 2d with empty arrays as children
-      console.log('answers: ', answers);
+      // console.log('answers: ', answers);
       answers.forEach((row, idx) => {
         questions.forEach((question) => {
+          if(opts.hideTimestamp && question.question.toLowerCase().localeCompare('timestamp') === 0){
+            return;
+          }
           if(question.type !== Types.QUALITATIVE){
             row.push(question.answers[idx])
           }
         })
       })
-      console.log('answers: ', answers);
+      // console.log('answers: ', answers);
       let structuredData = [header].concat(answers)
-      console.log("structured: " , structuredData);
+      // console.log("structured: " , structuredData);
       
       event.reply('folder-progress', 30);
 
@@ -144,15 +183,15 @@ function createWindow () {
     }
 
   function saveQualitativeData(folderPath, questions, opts, event){
-    //set isLinked true on every question that has another linking to it
+    //linkedTo is an array that holds the index for each question that links to the current question
     questions.forEach((question) => {
-      question.isLinked = false //set them all false by default
+      question.linkedTo = []
     });
-    questions.forEach((question) => {
+    questions.forEach((question, index) => {
       if(question.hasLink){
         let links = String(question.link).split(',');
         links.forEach((link) => {
-          questions[link].isLinked = true
+          questions[link].linkedTo.push(index)
         })
       }
     });
@@ -167,19 +206,13 @@ function createWindow () {
     for(let i=0; i<responses_length; i++) {
       event.reply('folder-progress', progress + i*progessPerFile);
 
-
-      /*
-        At this point I should just be able to pass questions and an index to the buildDocx function
-        Since it needs to look through all the questions anyway it will loop through, grab the question 
-        then use the index to grab the appropriate answer, it can also do the logic for blanks
-        The same index can be used to grab the pic after the Docx is built
-        The index already exists too, since i in this for loop is from 0 to the answer length, that should work perfectly
-      */
-
-
-      let doc = buildDocx(headerRow, qualitativeData);
-      let uid = picIdx === -1 ? `NoPIC${i+1}` : qualitativeData[picIdx];
-      uid = uid ? uid : `NoPIC${i+1}`;
+      let doc = buildDocx(questions, i, opts.hideTimestamp);
+      // console.log('picIndex: ', opts.picIndex);
+      // console.log('picQuestion: ', questions[opts.picIndex]);
+      // console.log('picAnswers: ', questions[opts.picIndex].answers);
+      // console.log('currentIndex: ', i);
+      let pic = questions[opts.picIndex].answers[i]
+      let uid = isEmptyString(pic) ? `NoPIC${i+1}` : pic;
       // console.log('uid: ', uid);
       let filePath = path.join(folderPath, opts.qualitativePrefix + " " + uid); 
       Packer.toBuffer(doc).then((buffer) => {
@@ -206,7 +239,8 @@ function createWindow () {
     //   hasLink: false,
     //   link: '',  
     //THINGS TO ADD
-    //    answer
+    //    answers
+    //    linkedTo
     // }
   // ]
   ipcMain.on('launch-folder-save-dialog', async (event, questions, opts) => {
@@ -224,28 +258,14 @@ function createWindow () {
       
       questions.forEach((question) => question.answers = [])
       let responses = csvData.slice(1); //remove the first row (the header row)
-      responses.forEach((response, index) => {
-        response.forEach((answer, jndex) => {
-          questions[jndex].answers.push(answer)
+      responses.forEach((response) => {
+        response.forEach((answer, index) => {
+          questions[index].answers.push(answer)
         })
       });
-      if(opts.hideTimestamp){
-        for(let i=0; i<questions.length; i++){
-          if(questions[i].question.toLowerCase().localeCompare('timestamp') === 0){
-            questions.splice(i, 1);
-            if(i < opts.picIndex){
-              opts.picIndex -= 1;
-            }
-            break;
-          }
-        }
-      }
-      console.log('questions: ', questions);
-      saveStructuredData(structedDataFilePath, questions, event);
-      saveQualitativeData(folderPath, questions, opts, event);
       try{
-        // saveStructuredData(structedDataFilePath, questions, event);
-        // saveQualitativeData(folderPath, questions, opts, event);
+        saveStructuredData(structedDataFilePath, questions, opts, event);
+        saveQualitativeData(folderPath, questions, opts, event);
       }catch(err){
         // console.error(err);
         event.reply('folder-error', err);
@@ -257,12 +277,12 @@ function createWindow () {
 
   // if dev
   //load the index.html from a url
-  win.loadURL('http://localhost:3000');
+  // win.loadURL('http://localhost:3000');
   // Open the DevTools.
   // win.webContents.openDevTools()
 
   // // if prod
-  // win.loadURL(`file://${__dirname}/../build/index.html`);
+  win.loadURL(`file://${__dirname}/../build/index.html`);
 
 }
 
